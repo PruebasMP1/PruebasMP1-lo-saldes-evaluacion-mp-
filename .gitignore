@@ -1,0 +1,10 @@
+# Entorno e instalación
+.venv/
+__pycache__/
+*.pyc
+
+# Datos locales (no se suben a GitHub: son tus pruebas reales)
+datos/
+
+# Credenciales y secretos (NUNCA subir esto)
+.streamlit/secrets.toml
