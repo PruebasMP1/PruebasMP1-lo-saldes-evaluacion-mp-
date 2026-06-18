@@ -101,10 +101,28 @@ with tab_form:
 
     with st.form("ficha", clear_on_submit=True):
         valores = {}
+        foto_mp_file = None
+        foto_resultado_file = None
         for titulo, lista in campos.SECCIONES:
             st.subheader(titulo)
             for clave, etiqueta, tipo, opciones in lista:
                 valores[clave] = _widget(clave, etiqueta, tipo, opciones)
+
+            # Foto de la materia prima evaluada → al final de la sección 1.
+            if titulo.startswith("1."):
+                foto_mp_file = st.file_uploader(
+                    "📷 Foto de la materia prima evaluada",
+                    type=["jpg", "jpeg", "png"],
+                    key="foto_mp",
+                    help="Desde el celular puedes tomar la foto en el momento o elegirla de la galería.",
+                )
+            # Foto del resultado final → al final de la sección 4.
+            if titulo.startswith("4."):
+                foto_resultado_file = st.file_uploader(
+                    "📷 Foto del resultado final (producto ya preparado)",
+                    type=["jpg", "jpeg", "png"],
+                    key="foto_res",
+                )
             st.divider()
 
         enviado = st.form_submit_button("✅ Guardar evaluación", type="primary", use_container_width=True)
@@ -120,6 +138,10 @@ with tab_form:
             valores["promedio_sensorial"] = promedio
             valores["id"] = alm.nuevo_id()
             valores["registrado_en"] = alm.marca_de_tiempo()
+
+            # Fotos → comprimidas a texto antes de guardar.
+            valores["foto_materia_prima"] = alm.preparar_imagen(foto_mp_file)
+            valores["foto_resultado"] = alm.preparar_imagen(foto_resultado_file)
 
             almacen.guardar(valores)
             st.success(
@@ -169,10 +191,41 @@ with tab_repo:
         except Exception:
             m3.metric("Aprobadas como apta", "—")
 
-        # --- Tabla con etiquetas legibles ---
-        cols_mostrar = [c for c in campos.COLUMNAS if c in vista.columns]
-        tabla = vista[cols_mostrar].rename(columns=campos.ETIQUETAS)
+        # --- Tabla con etiquetas legibles (sin el texto crudo de las fotos) ---
+        cols_mostrar = [
+            c for c in campos.COLUMNAS
+            if c in vista.columns and c not in campos.CLAVES_FOTO
+        ]
+        tabla = vista[cols_mostrar].copy()
+        # En vez del texto de la imagen, una marca de si hay foto o no.
+        for clave in campos.CLAVES_FOTO:
+            if clave in vista.columns:
+                tabla[clave] = vista[clave].apply(lambda x: "✅" if str(x).strip() else "—")
+        tabla = tabla.rename(columns=campos.ETIQUETAS)
         st.dataframe(tabla, use_container_width=True, hide_index=True)
+
+        # --- Visor de fotos por evaluación ---
+        tiene_fotos = any(
+            c in vista.columns and vista[c].astype(str).str.strip().any()
+            for c in campos.CLAVES_FOTO
+        )
+        if tiene_fotos:
+            st.subheader("📷 Ver fotos de una evaluación")
+            opciones = {
+                f"{r.get('id', '?')} · {r.get('producto_evaluado', '')}": i
+                for i, r in vista.iterrows()
+            }
+            etiqueta_sel = st.selectbox("Elige una evaluación", list(opciones.keys()))
+            fila = vista.loc[opciones[etiqueta_sel]]
+            f1, f2 = st.columns(2)
+            with f1:
+                img_mp = alm.imagen_desde_texto(fila.get("foto_materia_prima", ""))
+                st.caption("Materia prima")
+                st.image(img_mp, use_container_width=True) if img_mp else st.write("— sin foto —")
+            with f2:
+                img_res = alm.imagen_desde_texto(fila.get("foto_resultado", ""))
+                st.caption("Resultado final")
+                st.image(img_res, use_container_width=True) if img_res else st.write("— sin foto —")
 
         # --- Descargas ---
         st.subheader("Descargar repositorio")

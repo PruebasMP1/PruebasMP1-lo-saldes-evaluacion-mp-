@@ -22,6 +22,8 @@ Glosario rápido:
 """
 from __future__ import annotations
 
+import base64
+import io
 import os
 import sqlite3
 from datetime import datetime, timezone, timedelta
@@ -138,6 +140,54 @@ def obtener_almacen():
         except Exception as e:  # credenciales presentes pero mal puestas: avisar
             st.warning(f"Hay credenciales pero no pude conectar con Google Sheets ({e}). Usando archivo local.")
     return _AlmacenSQLite()
+
+
+# --------------------------------------------------------------------------- #
+#  Fotos: comprimir una imagen subida a texto (base64) y volver a leerla.
+# --------------------------------------------------------------------------- #
+# Límite seguro de caracteres por celda de Google Sheets (el real es 50.000).
+_LIMITE_CHARS = 48000
+
+
+def preparar_imagen(archivo_subido) -> str:
+    """Recibe una foto subida y devuelve la imagen comprimida como texto base64.
+
+    La achica y baja calidad hasta que entre en el límite de una celda de la
+    planilla Google. Devuelve "" si no se subió ninguna foto.
+    """
+    if archivo_subido is None:
+        return ""
+    from PIL import Image  # se importa aquí para no exigir Pillow si no hay fotos
+
+    try:
+        imagen = Image.open(archivo_subido).convert("RGB")
+    except Exception:
+        return ""
+
+    # Va probando tamaños/calidades de mayor a menor hasta que el texto entre.
+    ultimo = ""
+    for max_lado, calidad in [(640, 70), (512, 60), (400, 55), (320, 45), (240, 40)]:
+        copia = imagen.copy()
+        copia.thumbnail((max_lado, max_lado))
+        buffer = io.BytesIO()
+        copia.save(buffer, format="JPEG", quality=calidad)
+        texto = base64.b64encode(buffer.getvalue()).decode("ascii")
+        ultimo = texto
+        if len(texto) <= _LIMITE_CHARS:
+            return texto
+    return ultimo  # si nada entró, igual guardamos la versión más chica
+
+
+def imagen_desde_texto(texto: str):
+    """Devuelve los bytes de la imagen desde el texto base64 (o None si está vacío)."""
+    if not texto or not isinstance(texto, str):
+        return None
+    if texto.startswith("data:"):  # por si quedó con prefijo
+        texto = texto.split(",", 1)[-1]
+    try:
+        return base64.b64decode(texto)
+    except Exception:
+        return None
 
 
 def nuevo_id() -> str:

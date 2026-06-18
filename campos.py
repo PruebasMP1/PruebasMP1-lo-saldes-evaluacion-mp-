@@ -72,11 +72,16 @@ TODOS = GENERAL + TECNICA + SENSORIAL + RECOMENDACION
 # Claves de los puntajes sensoriales (para calcular el promedio).
 CLAVES_SENSORIAL = [c[0] for c in SENSORIAL]
 
+# Fotos: se guardan como imagen comprimida (texto base64) en estas columnas.
+# Se manejan aparte de los campos de texto porque son archivos, no respuestas escritas.
+CLAVES_FOTO = ["foto_materia_prima", "foto_resultado"]
+
 # Orden final de columnas en el repositorio (id y fecha de registro primero).
 COLUMNAS = (
     ["id", "registrado_en"]
     + [c[0] for c in TODOS]
     + ["promedio_sensorial"]
+    + CLAVES_FOTO
 )
 
 # Etiqueta legible por columna (para mostrar tablas y exportar bonito).
@@ -84,3 +89,5 @@ ETIQUETAS = {c[0]: c[1] for c in TODOS}
 ETIQUETAS["id"] = "ID"
 ETIQUETAS["registrado_en"] = "Registrado en"
 ETIQUETAS["promedio_sensorial"] = "Promedio sensorial"
+ETIQUETAS["foto_materia_prima"] = "Foto materia prima"
+ETIQUETAS["foto_resultado"] = "Foto resultado"
