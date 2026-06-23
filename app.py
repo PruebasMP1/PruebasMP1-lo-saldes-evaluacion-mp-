@@ -249,9 +249,35 @@ with tab_repo:
 
 
 # =========================================================================== #
-#  PESTAÑA 3 · DASHBOARD
+#  PESTAÑA 3 · DASHBOARD  (protegido con clave corta propia)
 # =========================================================================== #
+def _dashboard_desbloqueado() -> bool:
+    """El dashboard pide una clave corta SOLO si se configuró 'dash_password'.
+    Así producción carga datos libre, pero los números de gestión quedan reservados."""
+    try:
+        clave_dash = st.secrets.get("dash_password")
+    except Exception:
+        clave_dash = None
+    if not clave_dash:
+        return True  # sin clave configurada → dashboard visible (útil al probar en PC)
+    if st.session_state.get("dash_ok"):
+        return True
+    st.subheader("🔒 Dashboard reservado")
+    st.caption("Esta sección es para Control de Gestión. Ingresa la clave para verla.")
+    clave = st.text_input("Clave del dashboard", type="password", key="dash_clave")
+    if st.button("Ver dashboard", key="dash_btn"):
+        if clave == str(clave_dash):
+            st.session_state["dash_ok"] = True
+            st.rerun()
+        else:
+            st.error("Clave incorrecta.")
+    return False
+
+
 with tab_dash:
+    if not _dashboard_desbloqueado():
+        st.stop()
+
     df = almacen.leer_todo()
 
     if df.empty:
