@@ -65,7 +65,9 @@ st.caption(
     f"Guardando en: **{almacen.nombre}**"
 )
 
-tab_form, tab_repo = st.tabs(["📝 Nueva evaluación", "📊 Repositorio de pruebas"])
+tab_form, tab_repo, tab_dash = st.tabs(
+    ["📝 Nueva evaluación", "📊 Repositorio de pruebas", "📈 Dashboard"]
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -244,3 +246,63 @@ with tab_repo:
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
             )
+
+
+# =========================================================================== #
+#  PESTAÑA 3 · DASHBOARD
+# =========================================================================== #
+with tab_dash:
+    df = almacen.leer_todo()
+
+    if df.empty:
+        st.info("Aún no hay datos para graficar. Carga algunas evaluaciones primero.")
+    else:
+        # Columnas numéricas auxiliares para los gráficos.
+        df = df.copy()
+        df["_prom"] = pd.to_numeric(df.get("promedio_sensorial"), errors="coerce")
+        df["_fecha"] = pd.to_datetime(df.get("fecha_evaluacion"), errors="coerce")
+
+        # --- Indicadores principales ---
+        st.subheader("Resumen")
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Total de pruebas", len(df))
+        aptas = (df["es_apto"] == "Sí").sum() if "es_apto" in df else 0
+        k2.metric("Aptas", int(aptas))
+        pct = (aptas / len(df) * 100) if len(df) else 0
+        k3.metric("% aprobación", f"{pct:.0f}%")
+        k4.metric("Promedio sensorial", f"{df['_prom'].mean():.2f}/5" if df["_prom"].notna().any() else "—")
+
+        st.divider()
+
+        # --- Aptitud: apto / no / con observaciones ---
+        if "es_apto" in df and df["es_apto"].astype(str).str.strip().any():
+            st.markdown("**¿Apta como materia prima?**")
+            conteo = df["es_apto"].replace("", "Sin responder").value_counts()
+            st.bar_chart(conteo)
+
+        # --- Promedio sensorial por producto ---
+        if "producto_evaluado" in df and df["_prom"].notna().any():
+            st.markdown("**Promedio sensorial por producto** (0–5)")
+            por_prod = (
+                df.dropna(subset=["_prom"])
+                .groupby("producto_evaluado")["_prom"]
+                .mean()
+                .sort_values(ascending=False)
+            )
+            st.bar_chart(por_prod)
+
+        # --- Cantidad de pruebas por proveedor ---
+        if "proveedor" in df and df["proveedor"].astype(str).str.strip().any():
+            st.markdown("**Cantidad de pruebas por proveedor**")
+            por_prov = df[df["proveedor"].astype(str).str.strip() != ""]["proveedor"].value_counts()
+            st.bar_chart(por_prov)
+
+        # --- Evolución de pruebas en el tiempo ---
+        if df["_fecha"].notna().any():
+            st.markdown("**Pruebas realizadas por fecha**")
+            por_fecha = df.dropna(subset=["_fecha"]).groupby(df["_fecha"].dt.date).size()
+            st.bar_chart(por_fecha)
+
+        st.caption(
+            "Los gráficos se actualizan solos a medida que producción carga evaluaciones."
+        )

@@ -47,7 +47,12 @@ def _ahora_chile() -> str:
 class _AlmacenSQLite:
     nombre = "Archivo local (SQLite)"
 
-    def __init__(self, ruta: str = "datos/evaluaciones.db"):
+    def __init__(self, ruta: str = None):
+        # Ruta ANCLADA a la carpeta del código (no depende de desde dónde se lance
+        # la app). Así el formulario y los scripts siempre leen el mismo archivo.
+        if ruta is None:
+            base = os.path.dirname(os.path.abspath(__file__))
+            ruta = os.path.join(base, "datos", "evaluaciones.db")
         os.makedirs(os.path.dirname(ruta), exist_ok=True)
         self.ruta = ruta
         self._crear_tabla()
@@ -80,7 +85,47 @@ class _AlmacenSQLite:
 
 
 # --------------------------------------------------------------------------- #
-#  Adaptador 2: planilla Google  (para la versión online persistente)
+#  Adaptador 2: Neon / Postgres  (base de datos en la nube, persistente)
+# --------------------------------------------------------------------------- #
+class _AlmacenPostgres:
+    nombre = "Base de datos en la nube (Neon · Postgres)"
+
+    def __init__(self, dsn: str):
+        from sqlalchemy import create_engine
+
+        # Neon a veces entrega "postgres://"; SQLAlchemy quiere "postgresql://".
+        if dsn.startswith("postgres://"):
+            dsn = dsn.replace("postgres://", "postgresql://", 1)
+        # Asegurar conexión cifrada (Neon lo exige).
+        if "sslmode=" not in dsn:
+            dsn += ("&" if "?" in dsn else "?") + "sslmode=require"
+        # pool_pre_ping = reconecta solo si Neon "durmió" la base por inactividad.
+        self.engine = create_engine(dsn, pool_pre_ping=True)
+        self._crear_tabla()
+
+    def _crear_tabla(self):
+        from sqlalchemy import text
+        cols = ", ".join(f'"{c}" TEXT' for c in campos.COLUMNAS)
+        with self.engine.begin() as cx:
+            cx.execute(text(f'CREATE TABLE IF NOT EXISTS evaluaciones ({cols}, PRIMARY KEY ("id"))'))
+
+    def guardar(self, registro: dict):
+        from sqlalchemy import text
+        nombres = ", ".join(f'"{c}"' for c in campos.COLUMNAS)
+        binds = ", ".join(f":{c}" for c in campos.COLUMNAS)
+        params = {c: str(registro.get(c, "")) for c in campos.COLUMNAS}
+        with self.engine.begin() as cx:
+            cx.execute(text(f'INSERT INTO evaluaciones ({nombres}) VALUES ({binds})'), params)
+
+    def leer_todo(self) -> pd.DataFrame:
+        try:
+            return pd.read_sql("SELECT * FROM evaluaciones", self.engine)
+        except Exception:
+            return pd.DataFrame(columns=campos.COLUMNAS)
+
+
+# --------------------------------------------------------------------------- #
+#  Adaptador 3: planilla Google  (alternativa persistente; queda disponible)
 # --------------------------------------------------------------------------- #
 class _AlmacenGoogleSheets:
     nombre = "Planilla Google (persistente)"
@@ -123,22 +168,45 @@ class _AlmacenGoogleSheets:
 # --------------------------------------------------------------------------- #
 #  Selección automática del almacén
 # --------------------------------------------------------------------------- #
+def _leer_dsn_postgres():
+    """Lee el texto de conexión a Neon/Postgres desde los secretos (si existe)."""
+    try:
+        if "database_url" in st.secrets:
+            return str(st.secrets["database_url"])
+        if "neon" in st.secrets and "dsn" in st.secrets["neon"]:
+            return str(st.secrets["neon"]["dsn"])
+    except Exception:
+        return None
+    return None
+
+
 @st.cache_resource(show_spinner=False)
 def obtener_almacen():
-    """Devuelve el almacén a usar. Google Sheets si hay credenciales; si no, SQLite."""
-    # ¿Hay credenciales configuradas? Si no existe el archivo de secrets (caso normal
-    # cuando pruebas en tu PC), st.secrets lanza error: lo tomamos como "modo local"
-    # y NO mostramos ninguna alerta.
+    """Elige el almacén: Neon (preferido) → Google Sheets → archivo local SQLite.
+
+    Si no hay secretos configurados (caso normal al probar en tu PC), usa el
+    archivo local sin mostrar ninguna alerta.
+    """
+    # 1) Neon / Postgres — la opción elegida para la nube.
+    dsn = _leer_dsn_postgres()
+    if dsn:
+        try:
+            return _AlmacenPostgres(dsn)
+        except Exception as e:
+            st.warning(f"Hay conexión a la base pero no pude conectar ({e}). Usando archivo local.")
+
+    # 2) Google Sheets — alternativa, si algún día configuras esas credenciales.
     try:
         tiene_credenciales = ("gcp_service_account" in st.secrets) and ("gsheets" in st.secrets)
     except Exception:
         tiene_credenciales = False
-
     if tiene_credenciales:
         try:
             return _AlmacenGoogleSheets()
-        except Exception as e:  # credenciales presentes pero mal puestas: avisar
+        except Exception as e:
             st.warning(f"Hay credenciales pero no pude conectar con Google Sheets ({e}). Usando archivo local.")
+
+    # 3) Archivo local (para probar en tu PC).
     return _AlmacenSQLite()
 
 
