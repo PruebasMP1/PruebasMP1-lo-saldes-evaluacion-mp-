@@ -281,54 +281,118 @@ with tab_dash:
     df = almacen.leer_todo()
 
     if df.empty:
-        st.info("Aún no hay datos para graficar. Carga algunas evaluaciones primero.")
+        st.info("Aún no hay datos. Carga algunas evaluaciones para poder comparar y decidir.")
     else:
-        # Columnas numéricas auxiliares para los gráficos.
+        # --- Columnas auxiliares numéricas (para rankear y graficar) ---
         df = df.copy()
         df["_prom"] = pd.to_numeric(df.get("promedio_sensorial"), errors="coerce")
-        df["_fecha"] = pd.to_datetime(df.get("fecha_evaluacion"), errors="coerce")
+        df["_merma"] = pd.to_numeric(df.get("merma_estimada_pct"), errors="coerce")
+        for k in campos.CLAVES_SENSORIAL:
+            df["_" + k] = pd.to_numeric(df.get(k), errors="coerce")
+        # Orden de aptitud: apta primero (0), con observaciones (1), no (2), sin dato (3).
+        _ORDEN_APTO = {"Sí": 0, "Con observaciones": 1, "No": 2}
+        df["_rank_apto"] = df.get("es_apto", "").map(_ORDEN_APTO).fillna(3)
 
-        # --- Indicadores principales ---
-        st.subheader("Resumen")
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Total de pruebas", len(df))
-        aptas = (df["es_apto"] == "Sí").sum() if "es_apto" in df else 0
-        k2.metric("Aptas", int(aptas))
-        pct = (aptas / len(df) * 100) if len(df) else 0
-        k3.metric("% aprobación", f"{pct:.0f}%")
-        k4.metric("Promedio sensorial", f"{df['_prom'].mean():.2f}/5" if df["_prom"].notna().any() else "—")
+        def _mejor_opcion(grupo):
+            """Devuelve la fila recomendada de un grupo: apta con mayor sensorial y menor merma."""
+            aptas = grupo[grupo["es_apto"] == "Sí"]
+            base = aptas if not aptas.empty else grupo
+            return base.sort_values(["_prom", "_merma"], ascending=[False, True]).iloc[0], not aptas.empty
+
+        # --- Indicadores de contexto ---
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Pruebas registradas", len(df))
+        n_prod = df["producto_evaluado"].replace("", pd.NA).nunique()
+        c2.metric("Materias primas evaluadas", int(n_prod))
+        aptas_tot = (df["es_apto"] == "Sí").sum()
+        c3.metric("% de pruebas aprobadas", f"{(aptas_tot/len(df)*100):.0f}%")
 
         st.divider()
 
-        # --- Aptitud: apto / no / con observaciones ---
-        if "es_apto" in df and df["es_apto"].astype(str).str.strip().any():
-            st.markdown("**¿Apta como materia prima?**")
-            conteo = df["es_apto"].replace("", "Sin responder").value_counts()
-            st.bar_chart(conteo)
+        # ====================================================================== #
+        #  RECOMENDACIÓN POR MATERIA PRIMA  (la vista para decidir de un vistazo)
+        # ====================================================================== #
+        st.subheader("🏆 Recomendación por materia prima")
+        st.caption("Para cada insumo, la alternativa mejor evaluada (apta, mejor sensorial, menor merma).")
 
-        # --- Promedio sensorial por producto ---
-        if "producto_evaluado" in df and df["_prom"].notna().any():
-            st.markdown("**Promedio sensorial por producto** (0–5)")
-            por_prod = (
-                df.dropna(subset=["_prom"])
-                .groupby("producto_evaluado")["_prom"]
-                .mean()
-                .sort_values(ascending=False)
-            )
-            st.bar_chart(por_prod)
+        filas = []
+        for prod, g in df.groupby("producto_evaluado"):
+            if not str(prod).strip():
+                continue
+            mejor, hay_apta = _mejor_opcion(g)
+            filas.append({
+                "Materia prima": prod,
+                "Proveedor recomendado": mejor.get("proveedor", "?") if hay_apta else "— sin opción apta —",
+                "Sensorial (0-5)": f"{mejor['_prom']:.1f}" if pd.notna(mejor["_prom"]) else "—",
+                "Merma %": f"{mejor['_merma']:.0f}" if pd.notna(mejor["_merma"]) else "—",
+                "N° alternativas probadas": g["proveedor"].replace("", pd.NA).nunique(),
+                "Total pruebas": len(g),
+            })
+        if filas:
+            resumen = pd.DataFrame(filas).sort_values("Materia prima")
+            st.dataframe(resumen, use_container_width=True, hide_index=True)
+        else:
+            st.info("Falta completar el campo 'Producto evaluado' para poder recomendar.")
 
-        # --- Cantidad de pruebas por proveedor ---
-        if "proveedor" in df and df["proveedor"].astype(str).str.strip().any():
-            st.markdown("**Cantidad de pruebas por proveedor**")
-            por_prov = df[df["proveedor"].astype(str).str.strip() != ""]["proveedor"].value_counts()
-            st.bar_chart(por_prov)
+        st.divider()
 
-        # --- Evolución de pruebas en el tiempo ---
-        if df["_fecha"].notna().any():
-            st.markdown("**Pruebas realizadas por fecha**")
-            por_fecha = df.dropna(subset=["_fecha"]).groupby(df["_fecha"].dt.date).size()
-            st.bar_chart(por_fecha)
+        # ====================================================================== #
+        #  COMPARADOR EN DETALLE  (elegir un insumo y ver todas sus alternativas)
+        # ====================================================================== #
+        st.subheader("🔎 Comparar alternativas en detalle")
+        productos = sorted([p for p in df["producto_evaluado"].dropna().unique() if str(p).strip()])
+        if productos:
+            sel = st.selectbox("Elige la materia prima a decidir", productos)
+            sub = df[df["producto_evaluado"] == sel].copy().reset_index(drop=True)
 
-        st.caption(
-            "Los gráficos se actualizan solos a medida que producción carga evaluaciones."
-        )
+            # Recomendación destacada para el insumo elegido.
+            mejor, hay_apta = _mejor_opcion(sub)
+            prom_txt = f"{mejor['_prom']:.1f}/5" if pd.notna(mejor["_prom"]) else "s/d"
+            merma_txt = f"{mejor['_merma']:.0f}%" if pd.notna(mejor["_merma"]) else "s/d"
+            if hay_apta:
+                st.success(
+                    f"✅ **Recomendada para {sel}: {mejor.get('proveedor', '?')}** — "
+                    f"sensorial {prom_txt}, apta, merma {merma_txt}."
+                )
+            else:
+                st.warning(
+                    f"⚠️ Ninguna alternativa de **{sel}** fue marcada como *apta* todavía. "
+                    f"La mejor evaluada hasta ahora es **{mejor.get('proveedor', '?')}** ({prom_txt})."
+                )
+
+            # Tabla comparativa con los factores que importan para elegir.
+            cols_decision = {
+                "proveedor": "Proveedor",
+                "es_apto": "¿Apta?",
+                "_prom": "Sensorial",
+                "merma_estimada_pct": "Merma %",
+                "compatibilidad_masas": "Compat. masas",
+                "facilidad_manipulacion": "Facilidad",
+                "requiere_ajustes": "¿Ajustes?",
+                "uso_recomendado": "Usos recomendados",
+                "fecha_evaluacion": "Fecha",
+            }
+            presentes = [c for c in cols_decision if c in sub.columns]
+            tabla_dec = sub.sort_values(["_rank_apto", "_prom"], ascending=[True, False])[presentes].copy()
+            tabla_dec["_prom"] = tabla_dec["_prom"].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "—")
+            tabla_dec = tabla_dec.rename(columns=cols_decision)
+            st.markdown("**Todas las alternativas probadas** (la mejor arriba)")
+            st.dataframe(tabla_dec, use_container_width=True, hide_index=True)
+
+            # Perfil sensorial por alternativa: muestra POR QUÉ puntúa así.
+            cols_sens = ["_" + k for k in campos.CLAVES_SENSORIAL]
+            if sub[cols_sens].notna().any().any():
+                # Etiqueta única por alternativa (proveedor + fecha).
+                sub["_opcion"] = (
+                    sub["proveedor"].replace("", "(s/proveedor)").fillna("(s/proveedor)")
+                    + " · " + sub.get("fecha_evaluacion", "").astype(str)
+                )
+                sub["_opcion"] = sub["_opcion"] + sub.groupby("_opcion").cumcount().apply(
+                    lambda n: "" if n == 0 else f" ({n + 1})"
+                )
+                perfil = sub.set_index("_opcion")[cols_sens]
+                perfil.columns = [campos.ETIQUETAS.get(k, k) for k in campos.CLAVES_SENSORIAL]
+                st.markdown("**Perfil sensorial por alternativa** (0–5 en cada atributo)")
+                st.bar_chart(perfil.T)
+        else:
+            st.info("Aún no hay productos con nombre para comparar.")
