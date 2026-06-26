@@ -57,6 +57,35 @@ almacen = alm.obtener_almacen()
 
 
 # --------------------------------------------------------------------------- #
+#  Atajos de lectura/escritura para las dos tablas (evaluaciones y muestras)
+# --------------------------------------------------------------------------- #
+def leer_evals():
+    return almacen.leer("evaluaciones", campos.COLUMNAS)
+
+
+def guardar_eval(registro):
+    almacen.guardar("evaluaciones", campos.COLUMNAS, registro)
+
+
+def leer_muestras():
+    return almacen.leer("muestras", campos.COLUMNAS_MUESTRA)
+
+
+def guardar_muestra(registro):
+    almacen.guardar("muestras", campos.COLUMNAS_MUESTRA, registro)
+
+
+def muestras_pendientes():
+    """Muestras entregadas que aún NO tienen una evaluación enlazada."""
+    m = leer_muestras()
+    if m.empty:
+        return m
+    e = leer_evals()
+    usados = set(e["id_muestra"].astype(str)) if "id_muestra" in e.columns else set()
+    return m[~m["id_muestra"].astype(str).isin(usados)]
+
+
+# --------------------------------------------------------------------------- #
 #  Encabezado
 # --------------------------------------------------------------------------- #
 st.title("🥖 Evaluación de Materia Prima")
@@ -65,36 +94,110 @@ st.caption(
     f"Guardando en: **{almacen.nombre}**"
 )
 
-tab_form, tab_repo, tab_dash = st.tabs(
-    ["📝 Nueva evaluación", "📊 Repositorio de pruebas", "📈 Dashboard"]
+tab_muestra, tab_form, tab_repo, tab_dash = st.tabs(
+    ["📦 Entrega de muestra", "📝 Evaluación", "📊 Repositorio de pruebas", "📈 Dashboard"]
 )
 
 
 # --------------------------------------------------------------------------- #
 #  Helper: dibuja un campo según su tipo y devuelve el valor ingresado.
+#  'key' permite reutilizar el mismo campo en formularios distintos sin choques.
 # --------------------------------------------------------------------------- #
-def _widget(clave, etiqueta, tipo, opciones):
+def _widget(clave, etiqueta, tipo, opciones, key=None):
+    key = key or clave
     if tipo == "text":
-        return st.text_input(etiqueta, key=clave)
+        return st.text_input(etiqueta, key=key)
     if tipo == "textarea":
-        return st.text_area(etiqueta, key=clave, height=80)
+        return st.text_area(etiqueta, key=key, height=80)
     if tipo == "date":
-        return st.date_input(etiqueta, key=clave).strftime("%Y-%m-%d")
+        return st.date_input(etiqueta, key=key).strftime("%Y-%m-%d")
     if tipo == "number":
-        return st.number_input(etiqueta, min_value=0.0, max_value=100.0, step=0.5, key=clave)
+        return st.number_input(etiqueta, min_value=0.0, max_value=100.0, step=0.5, key=key)
     if tipo == "select":
-        return st.selectbox(etiqueta, options=["—"] + opciones, key=clave)
+        return st.selectbox(etiqueta, options=["—"] + opciones, key=key)
     if tipo == "multiselect":
-        return ", ".join(st.multiselect(etiqueta, options=opciones, key=clave))
+        return ", ".join(st.multiselect(etiqueta, options=opciones, key=key))
     if tipo == "score":
-        return st.slider(etiqueta + "  (0 = malo · 5 = excelente)", 0, 5, 3, key=clave)
-    return st.text_input(etiqueta, key=clave)
+        return st.slider(etiqueta + "  (0 = malo · 5 = excelente)", 0, 5, 3, key=key)
+    return st.text_input(etiqueta, key=key)
+
+
+# =========================================================================== #
+#  PESTAÑA 0 · ENTREGA DE MUESTRA  (módulo previo — lo usa Abastecimiento)
+# =========================================================================== #
+with tab_muestra:
+    st.info(
+        "**Abastecimiento:** registra aquí la muestra que llevas a Producción. "
+        "Quedará como *pendiente* hasta que Producción la pruebe y la enlace a una evaluación.",
+        icon="📦",
+    )
+
+    with st.form("form_muestra", clear_on_submit=True):
+        vals_m = {}
+        for clave, etiqueta, tipo, opciones in campos.MUESTRA:
+            vals_m[clave] = _widget(clave, etiqueta, tipo, opciones, key="m_" + clave)
+        enviar_m = st.form_submit_button(
+            "📦 Registrar muestra entregada", type="primary", use_container_width=True
+        )
+
+    if enviar_m:
+        if not vals_m.get("producto") or not vals_m.get("proveedor"):
+            st.error("Faltan datos: indica al menos **Materia prima** y **Proveedor**.")
+        else:
+            vals_m["id_muestra"] = alm.nuevo_id_muestra()
+            vals_m["registrado_en"] = alm.marca_de_tiempo()
+            guardar_muestra(vals_m)
+            st.success(
+                f"✅ Muestra registrada: **{vals_m['id_muestra']}** "
+                f"({vals_m['producto']} / {vals_m['proveedor']}). "
+                "Producción ya puede elegirla en la pestaña *Evaluación*."
+            )
+
+    st.divider()
+    st.subheader("⏳ Muestras pendientes de evaluación")
+    pend = muestras_pendientes()
+    if pend.empty:
+        st.caption("No hay muestras pendientes. ¡Todo lo entregado ya fue evaluado!")
+    else:
+        cols_p = [c for c in campos.COLUMNAS_MUESTRA if c in pend.columns]
+        st.dataframe(
+            pend[cols_p].rename(columns=campos.ETIQUETAS_MUESTRA),
+            use_container_width=True,
+            hide_index=True,
+        )
 
 
 # =========================================================================== #
 #  PESTAÑA 1 · FORMULARIO
 # =========================================================================== #
 with tab_form:
+    # --- Módulo previo: elegir la muestra entregada por Abastecimiento ---
+    pend = muestras_pendientes()
+    muestra_sel = None
+    if not pend.empty:
+        opciones_m = {"— Sin muestra asociada (evaluación libre) —": None}
+        for _, r in pend.iterrows():
+            etq = (f"{r['id_muestra']} · {r.get('producto', '')} / {r.get('proveedor', '')}"
+                   f" · entregada {r.get('fecha_entrega', '')}")
+            opciones_m[etq] = r
+        sel_label = st.selectbox(
+            "¿Evalúas una muestra entregada por Abastecimiento?",
+            list(opciones_m.keys()),
+            key="sel_muestra",
+        )
+        muestra_sel = opciones_m[sel_label]
+        if muestra_sel is not None:
+            st.success(
+                f"🔗 Evaluando muestra **{muestra_sel['id_muestra']}** — "
+                f"{muestra_sel.get('producto', '')} / {muestra_sel.get('proveedor', '')}. "
+                f"Objetivo: {muestra_sel.get('objetivo', '') or '—'}"
+            )
+    else:
+        st.caption(
+            "No hay muestras pendientes registradas por Abastecimiento. "
+            "Puedes igual hacer una evaluación libre."
+        )
+
     st.info(
         "Completa la ficha luego de probar la muestra. Los campos de sabor, aroma, "
         "etc. van de **0 a 5**. Al final presiona **Guardar evaluación**.",
@@ -108,7 +211,15 @@ with tab_form:
         for titulo, lista in campos.SECCIONES:
             st.subheader(titulo)
             for clave, etiqueta, tipo, opciones in lista:
-                valores[clave] = _widget(clave, etiqueta, tipo, opciones)
+                # Si hay muestra asociada, producto y proveedor vienen de ella (no se reescriben).
+                if muestra_sel is not None and clave == "producto_evaluado":
+                    valores[clave] = str(muestra_sel.get("producto", "") or "")
+                    st.text_input(etiqueta, value=valores[clave], disabled=True, key="lock_prod")
+                elif muestra_sel is not None and clave == "proveedor":
+                    valores[clave] = str(muestra_sel.get("proveedor", "") or "")
+                    st.text_input(etiqueta, value=valores[clave], disabled=True, key="lock_prov")
+                else:
+                    valores[clave] = _widget(clave, etiqueta, tipo, opciones)
 
             # Foto de la materia prima evaluada → al final de la sección 1.
             if titulo.startswith("1."):
@@ -140,14 +251,19 @@ with tab_form:
             valores["promedio_sensorial"] = promedio
             valores["id"] = alm.nuevo_id()
             valores["registrado_en"] = alm.marca_de_tiempo()
+            # Enlace con la muestra entregada (vacío si fue evaluación libre).
+            valores["id_muestra"] = (
+                str(muestra_sel["id_muestra"]) if muestra_sel is not None else ""
+            )
 
             # Fotos → comprimidas a texto antes de guardar.
             valores["foto_materia_prima"] = alm.preparar_imagen(foto_mp_file)
             valores["foto_resultado"] = alm.preparar_imagen(foto_resultado_file)
 
-            almacen.guardar(valores)
+            guardar_eval(valores)
+            enlace = f" · enlazada a muestra **{valores['id_muestra']}**" if valores["id_muestra"] else ""
             st.success(
-                f"¡Guardado! ID **{valores['id']}** · promedio sensorial **{promedio}/5**. "
+                f"¡Guardado! ID **{valores['id']}** · promedio sensorial **{promedio}/5**{enlace}. "
                 "Lo verás en la pestaña *Repositorio*."
             )
             st.balloons()
@@ -157,10 +273,10 @@ with tab_form:
 #  PESTAÑA 2 · REPOSITORIO
 # =========================================================================== #
 with tab_repo:
-    df = almacen.leer_todo()
+    df = leer_evals()
 
     if df.empty:
-        st.info("Aún no hay evaluaciones registradas. Carga la primera en la pestaña *Nueva evaluación*.")
+        st.info("Aún no hay evaluaciones registradas. Carga la primera en la pestaña *Evaluación*.")
     else:
         # Orden: más recientes arriba.
         if "registrado_en" in df.columns:
@@ -278,7 +394,7 @@ with tab_dash:
     if not _dashboard_desbloqueado():
         st.stop()
 
-    df = almacen.leer_todo()
+    df = leer_evals()
 
     if df.empty:
         st.info("Aún no hay datos. Carga algunas evaluaciones para poder comparar y decidir.")

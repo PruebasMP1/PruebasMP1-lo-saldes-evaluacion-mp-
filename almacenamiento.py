@@ -55,33 +55,39 @@ class _AlmacenSQLite:
             ruta = os.path.join(base, "datos", "evaluaciones.db")
         os.makedirs(os.path.dirname(ruta), exist_ok=True)
         self.ruta = ruta
-        self._crear_tabla()
+        self._listas = set()  # tablas ya preparadas en esta sesión
 
     def _conn(self):
         return sqlite3.connect(self.ruta)
 
-    def _crear_tabla(self):
-        cols = ", ".join(f'"{c}" TEXT' for c in campos.COLUMNAS)
+    def _preparar(self, tabla: str, columnas: list):
+        if tabla in self._listas:
+            return
+        cols = ", ".join(f'"{c}" TEXT' for c in columnas)
         with self._conn() as cx:
-            cx.execute(f'CREATE TABLE IF NOT EXISTS evaluaciones ({cols})')
+            cx.execute(f'CREATE TABLE IF NOT EXISTS "{tabla}" ({cols})')
+            # Agregar columnas nuevas que falten (auto-migración).
+            existentes = {r[1] for r in cx.execute(f'PRAGMA table_info("{tabla}")')}
+            for c in columnas:
+                if c not in existentes:
+                    cx.execute(f'ALTER TABLE "{tabla}" ADD COLUMN "{c}" TEXT')
+        self._listas.add(tabla)
 
-    def guardar(self, registro: dict):
-        valores = [str(registro.get(c, "")) for c in campos.COLUMNAS]
-        marcadores = ", ".join("?" for _ in campos.COLUMNAS)
-        nombres = ", ".join(f'"{c}"' for c in campos.COLUMNAS)
+    def guardar(self, tabla: str, columnas: list, registro: dict):
+        self._preparar(tabla, columnas)
+        valores = [str(registro.get(c, "")) for c in columnas]
+        marcadores = ", ".join("?" for _ in columnas)
+        nombres = ", ".join(f'"{c}"' for c in columnas)
         with self._conn() as cx:
-            cx.execute(
-                f'INSERT INTO evaluaciones ({nombres}) VALUES ({marcadores})',
-                valores,
-            )
+            cx.execute(f'INSERT INTO "{tabla}" ({nombres}) VALUES ({marcadores})', valores)
 
-    def leer_todo(self) -> pd.DataFrame:
+    def leer(self, tabla: str, columnas: list) -> pd.DataFrame:
+        self._preparar(tabla, columnas)
         with self._conn() as cx:
             try:
-                df = pd.read_sql_query("SELECT * FROM evaluaciones", cx)
+                return pd.read_sql_query(f'SELECT * FROM "{tabla}"', cx)
             except Exception:
-                df = pd.DataFrame(columns=campos.COLUMNAS)
-        return df
+                return pd.DataFrame(columns=columnas)
 
 
 # --------------------------------------------------------------------------- #
@@ -101,27 +107,36 @@ class _AlmacenPostgres:
             dsn += ("&" if "?" in dsn else "?") + "sslmode=require"
         # pool_pre_ping = reconecta solo si Neon "durmió" la base por inactividad.
         self.engine = create_engine(dsn, pool_pre_ping=True)
-        self._crear_tabla()
+        self._listas = set()  # tablas ya preparadas en esta sesión
 
-    def _crear_tabla(self):
+    def _preparar(self, tabla: str, columnas: list):
+        if tabla in self._listas:
+            return
         from sqlalchemy import text
-        cols = ", ".join(f'"{c}" TEXT' for c in campos.COLUMNAS)
+        cols = ", ".join(f'"{c}" TEXT' for c in columnas)
+        pk = columnas[0]  # primera columna = clave primaria (id o id_muestra)
         with self.engine.begin() as cx:
-            cx.execute(text(f'CREATE TABLE IF NOT EXISTS evaluaciones ({cols}, PRIMARY KEY ("id"))'))
+            cx.execute(text(f'CREATE TABLE IF NOT EXISTS "{tabla}" ({cols}, PRIMARY KEY ("{pk}"))'))
+            # Agregar columnas nuevas que falten (auto-migración).
+            for c in columnas:
+                cx.execute(text(f'ALTER TABLE "{tabla}" ADD COLUMN IF NOT EXISTS "{c}" TEXT'))
+        self._listas.add(tabla)
 
-    def guardar(self, registro: dict):
+    def guardar(self, tabla: str, columnas: list, registro: dict):
         from sqlalchemy import text
-        nombres = ", ".join(f'"{c}"' for c in campos.COLUMNAS)
-        binds = ", ".join(f":{c}" for c in campos.COLUMNAS)
-        params = {c: str(registro.get(c, "")) for c in campos.COLUMNAS}
+        self._preparar(tabla, columnas)
+        nombres = ", ".join(f'"{c}"' for c in columnas)
+        binds = ", ".join(f":{c}" for c in columnas)
+        params = {c: str(registro.get(c, "")) for c in columnas}
         with self.engine.begin() as cx:
-            cx.execute(text(f'INSERT INTO evaluaciones ({nombres}) VALUES ({binds})'), params)
+            cx.execute(text(f'INSERT INTO "{tabla}" ({nombres}) VALUES ({binds})'), params)
 
-    def leer_todo(self) -> pd.DataFrame:
+    def leer(self, tabla: str, columnas: list) -> pd.DataFrame:
+        self._preparar(tabla, columnas)
         try:
-            return pd.read_sql("SELECT * FROM evaluaciones", self.engine)
+            return pd.read_sql(f'SELECT * FROM "{tabla}"', self.engine)
         except Exception:
-            return pd.DataFrame(columns=campos.COLUMNAS)
+            return pd.DataFrame(columns=columnas)
 
 
 # --------------------------------------------------------------------------- #
@@ -141,27 +156,27 @@ class _AlmacenGoogleSheets:
         ]
         creds = Credentials.from_service_account_info(cred_info, scopes=scopes)
         cliente = gspread.authorize(creds)
+        self.libro = cliente.open_by_key(st.secrets["gsheets"]["spreadsheet_id"])
 
-        sheet_id = st.secrets["gsheets"]["spreadsheet_id"]
-        hoja_nombre = st.secrets["gsheets"].get("worksheet", "evaluaciones")
-        libro = cliente.open_by_key(sheet_id)
+    def _hoja(self, tabla: str, columnas: list):
+        """Devuelve la hoja (una por tabla), creándola y poniéndole encabezados."""
         try:
-            self.hoja = libro.worksheet(hoja_nombre)
+            hoja = self.libro.worksheet(tabla)
         except Exception:
-            self.hoja = libro.add_worksheet(hoja_nombre, rows=1000, cols=len(campos.COLUMNAS))
-        # Asegurar fila de encabezados.
-        encabezados = self.hoja.row_values(1)
-        if encabezados != campos.COLUMNAS:
-            self.hoja.update("A1", [campos.COLUMNAS])
+            hoja = self.libro.add_worksheet(tabla, rows=1000, cols=len(columnas))
+        if hoja.row_values(1) != columnas:
+            hoja.update("A1", [columnas])
+        return hoja
 
-    def guardar(self, registro: dict):
-        fila = [str(registro.get(c, "")) for c in campos.COLUMNAS]
-        self.hoja.append_row(fila, value_input_option="USER_ENTERED")
+    def guardar(self, tabla: str, columnas: list, registro: dict):
+        hoja = self._hoja(tabla, columnas)
+        fila = [str(registro.get(c, "")) for c in columnas]
+        hoja.append_row(fila, value_input_option="USER_ENTERED")
 
-    def leer_todo(self) -> pd.DataFrame:
-        registros = self.hoja.get_all_records()  # usa la fila 1 como encabezado
+    def leer(self, tabla: str, columnas: list) -> pd.DataFrame:
+        registros = self._hoja(tabla, columnas).get_all_records()
         if not registros:
-            return pd.DataFrame(columns=campos.COLUMNAS)
+            return pd.DataFrame(columns=columnas)
         return pd.DataFrame(registros)
 
 
@@ -261,6 +276,11 @@ def imagen_desde_texto(texto: str):
 def nuevo_id() -> str:
     """ID legible y ordenable por fecha: EVAL-AAAAMMDD-HHMMSS."""
     return "EVAL-" + datetime.now(_TZ_CHILE).strftime("%Y%m%d-%H%M%S")
+
+
+def nuevo_id_muestra() -> str:
+    """N° de muestra legible y ordenable: MUE-AAAAMMDD-HHMMSS."""
+    return "MUE-" + datetime.now(_TZ_CHILE).strftime("%Y%m%d-%H%M%S")
 
 
 def marca_de_tiempo() -> str:

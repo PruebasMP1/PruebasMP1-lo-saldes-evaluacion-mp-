@@ -58,6 +58,28 @@ RECOMENDACION = [
     ("comentarios_finales", "Comentarios finales del evaluador", "textarea", None),
 ]
 
+# --------------------------------------------------------------------------- #
+#  MÓDULO PREVIO · Recepción de muestra (lo registra ABASTECIMIENTO al entregar)
+# --------------------------------------------------------------------------- #
+# Cuando Abastecimiento lleva una muestra a Producción, la registra aquí. Luego
+# Producción la elige de la lista de "pendientes" y la evalúa: así quedan enlazadas.
+MUESTRA = [
+    ("fecha_entrega", "Fecha de entrega de la muestra", "date", None),
+    ("entregado_por", "Entregada por (Abastecimiento)", "text", None),
+    ("producto", "Materia prima / producto", "text", None),
+    ("proveedor", "Proveedor", "text", None),
+    ("lote_vencimiento", "Lote / Fecha de vencimiento", "text", None),
+    ("cantidad", "Cantidad o formato de la muestra (ej: 2 kg)", "text", None),
+    ("objetivo", "Objetivo de la prueba (¿qué materia prima busca reemplazar?)", "textarea", None),
+    ("observaciones_entrega", "Observaciones de la entrega", "textarea", None),
+]
+
+COLUMNAS_MUESTRA = ["id_muestra", "registrado_en"] + [c[0] for c in MUESTRA]
+ETIQUETAS_MUESTRA = {c[0]: c[1] for c in MUESTRA}
+ETIQUETAS_MUESTRA["id_muestra"] = "N° de muestra"
+ETIQUETAS_MUESTRA["registrado_en"] = "Registrado en"
+
+
 # Secciones en orden, tal como aparecen en la ficha original.
 SECCIONES = [
     ("1. Información general", GENERAL),
@@ -77,8 +99,9 @@ CLAVES_SENSORIAL = [c[0] for c in SENSORIAL]
 CLAVES_FOTO = ["foto_materia_prima", "foto_resultado"]
 
 # Orden final de columnas en el repositorio (id y fecha de registro primero).
+# 'id_muestra' enlaza la evaluación con la muestra entregada por Abastecimiento.
 COLUMNAS = (
-    ["id", "registrado_en"]
+    ["id", "registrado_en", "id_muestra"]
     + [c[0] for c in TODOS]
     + ["promedio_sensorial"]
     + CLAVES_FOTO
@@ -88,6 +111,7 @@ COLUMNAS = (
 ETIQUETAS = {c[0]: c[1] for c in TODOS}
 ETIQUETAS["id"] = "ID"
 ETIQUETAS["registrado_en"] = "Registrado en"
+ETIQUETAS["id_muestra"] = "N° de muestra"
 ETIQUETAS["promedio_sensorial"] = "Promedio sensorial"
 ETIQUETAS["foto_materia_prima"] = "Foto materia prima"
 ETIQUETAS["foto_resultado"] = "Foto resultado"
