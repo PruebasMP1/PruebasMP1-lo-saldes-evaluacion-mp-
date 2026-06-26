@@ -46,6 +46,7 @@ def _ahora_chile() -> str:
 # --------------------------------------------------------------------------- #
 class _AlmacenSQLite:
     nombre = "Archivo local (SQLite)"
+    persistente = False  # en la nube es TEMPORAL: se borra al reiniciar
 
     def __init__(self, ruta: str = None):
         # Ruta ANCLADA a la carpeta del código (no depende de desde dónde se lance
@@ -95,6 +96,7 @@ class _AlmacenSQLite:
 # --------------------------------------------------------------------------- #
 class _AlmacenPostgres:
     nombre = "Base de datos en la nube (Neon · Postgres)"
+    persistente = True
 
     def __init__(self, dsn: str):
         from sqlalchemy import create_engine
@@ -144,6 +146,7 @@ class _AlmacenPostgres:
 # --------------------------------------------------------------------------- #
 class _AlmacenGoogleSheets:
     nombre = "Planilla Google (persistente)"
+    persistente = True
 
     def __init__(self):
         import gspread

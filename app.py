@@ -94,6 +94,16 @@ st.caption(
     f"Guardando en: **{almacen.nombre}**"
 )
 
+# Blindaje: aviso imposible de ignorar si NO estamos en una base persistente.
+if not getattr(almacen, "persistente", False):
+    st.error(
+        "⚠️ **MODO TEMPORAL — los datos NO se guardan.** Ahora mismo se está usando "
+        "almacenamiento local; en la nube esto se **borra al reiniciar**. "
+        "**No cargues datos reales** hasta que aquí arriba diga "
+        "*«Guardando en: Base de datos en la nube (Neon · Postgres)»*.",
+        icon="🚨",
+    )
+
 tab_muestra, tab_form, tab_repo, tab_dash = st.tabs(
     ["📦 Entrega de muestra", "📝 Evaluación", "📊 Repositorio de pruebas", "📈 Dashboard"]
 )
