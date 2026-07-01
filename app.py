@@ -55,6 +55,19 @@ if not _control_acceso():
 
 almacen = alm.obtener_almacen()
 
+# BLINDAJE ANTI-PÉRDIDA: en la nube sin base persistente, no dejamos cargar nada.
+if almacen is None:
+    st.title("🥖 Evaluación de Materia Prima")
+    st.error(
+        "🚨 **La app no está conectada a la base de datos permanente (Neon).**\n\n"
+        "Para no perder información, se **desactivó la carga de datos**. "
+        "Nadie debería ingresar pruebas hasta resolver la conexión.\n\n"
+        "**Control de Gestión:** revisa el secret `database_url` en Streamlit "
+        "(Settings → Secrets) y que la base Neon esté activa.",
+        icon="🚨",
+    )
+    st.stop()
+
 
 # --------------------------------------------------------------------------- #
 #  Atajos de lectura/escritura para las dos tablas (evaluaciones y muestras)
@@ -156,12 +169,19 @@ with tab_muestra:
         else:
             vals_m["id_muestra"] = alm.nuevo_id_muestra()
             vals_m["registrado_en"] = alm.marca_de_tiempo()
-            guardar_muestra(vals_m)
-            st.success(
-                f"✅ Muestra registrada: **{vals_m['id_muestra']}** "
-                f"({vals_m['producto']} / {vals_m['proveedor']}). "
-                "Producción ya puede elegirla en la pestaña *Evaluación*."
-            )
+            try:
+                guardar_muestra(vals_m)
+            except Exception as e:
+                st.error(
+                    f"⚠️ No se pudo registrar la muestra ({e}). Vuelve a intentar; "
+                    "si el problema sigue, avisa a Control de Gestión."
+                )
+            else:
+                st.success(
+                    f"✅ Muestra registrada: **{vals_m['id_muestra']}** "
+                    f"({vals_m['producto']} / {vals_m['proveedor']}). "
+                    "Producción ya puede elegirla en la pestaña *Evaluación*."
+                )
 
     st.divider()
     st.subheader("⏳ Muestras pendientes de evaluación")
@@ -270,13 +290,21 @@ with tab_form:
             valores["foto_materia_prima"] = alm.preparar_imagen(foto_mp_file)
             valores["foto_resultado"] = alm.preparar_imagen(foto_resultado_file)
 
-            guardar_eval(valores)
-            enlace = f" · enlazada a muestra **{valores['id_muestra']}**" if valores["id_muestra"] else ""
-            st.success(
-                f"¡Guardado! ID **{valores['id']}** · promedio sensorial **{promedio}/5**{enlace}. "
-                "Lo verás en la pestaña *Repositorio*."
-            )
-            st.balloons()
+            try:
+                guardar_eval(valores)
+            except Exception as e:
+                st.error(
+                    f"⚠️ No se pudo guardar en la base de datos ({e}). "
+                    "Vuelve a intentar; si el problema sigue, avisa a Control de Gestión. "
+                    "**Tu ficha NO se registró**, así que no la des por guardada."
+                )
+            else:
+                enlace = f" · enlazada a muestra **{valores['id_muestra']}**" if valores["id_muestra"] else ""
+                st.success(
+                    f"¡Guardado! ID **{valores['id']}** · promedio sensorial **{promedio}/5**{enlace}. "
+                    "Lo verás en la pestaña *Repositorio*."
+                )
+                st.balloons()
 
 
 # =========================================================================== #

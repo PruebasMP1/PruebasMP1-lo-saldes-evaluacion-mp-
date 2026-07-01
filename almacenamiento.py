@@ -198,12 +198,21 @@ def _leer_dsn_postgres():
     return None
 
 
+def _en_la_nube() -> bool:
+    """¿La app corre en Streamlit Community Cloud? Allí los archivos viven en /mount
+    y el disco es EFÍMERO (se borra al reiniciar). En tu PC esto es False."""
+    ruta = os.path.abspath(__file__).replace("\\", "/")
+    return ruta.startswith("/mount") or os.path.exists("/mount/src")
+
+
 @st.cache_resource(show_spinner=False)
 def obtener_almacen():
-    """Elige el almacén: Neon (preferido) → Google Sheets → archivo local SQLite.
+    """Elige el almacén con criterio ANTI-PÉRDIDA:
 
-    Si no hay secretos configurados (caso normal al probar en tu PC), usa el
-    archivo local sin mostrar ninguna alerta.
+    - Neon (preferido) → Google Sheets → (solo en tu PC) archivo local SQLite.
+    - EN LA NUBE, si no hay base persistente, devuelve None a propósito: así la app
+      BLOQUEA la carga en vez de guardar en memoria temporal que se borra. Nunca más
+      "aparenta guardar" sin guardar de verdad.
     """
     # 1) Neon / Postgres — la opción elegida para la nube.
     dsn = _leer_dsn_postgres()
@@ -211,7 +220,10 @@ def obtener_almacen():
         try:
             return _AlmacenPostgres(dsn)
         except Exception as e:
-            st.warning(f"Hay conexión a la base pero no pude conectar ({e}). Usando archivo local.")
+            if _en_la_nube():
+                st.error(f"No pude conectar a la base de datos permanente: {e}")
+                return None  # bloquear: NO caer a memoria temporal en la nube
+            st.warning(f"No pude conectar a la base ({e}). Usando archivo local (solo tu PC).")
 
     # 2) Google Sheets — alternativa, si algún día configuras esas credenciales.
     try:
@@ -222,9 +234,14 @@ def obtener_almacen():
         try:
             return _AlmacenGoogleSheets()
         except Exception as e:
-            st.warning(f"Hay credenciales pero no pude conectar con Google Sheets ({e}). Usando archivo local.")
+            if _en_la_nube():
+                st.error(f"No pude conectar con Google Sheets: {e}")
+                return None
+            st.warning(f"No pude conectar con Google Sheets ({e}). Usando archivo local (solo tu PC).")
 
-    # 3) Archivo local (para probar en tu PC).
+    # 3) Sin base persistente. En la nube: BLOQUEAR. En tu PC: SQLite local (para probar).
+    if _en_la_nube():
+        return None
     return _AlmacenSQLite()
 
 
