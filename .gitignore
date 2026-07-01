@@ -8,3 +8,6 @@ datos/
 
 # Credenciales y secretos (NUNCA subir esto)
 .streamlit/secrets.toml
+
+# Monitor de salud (contiene la conexión a Neon, NO subir)
+.monitor/
